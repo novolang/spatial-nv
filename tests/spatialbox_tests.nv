@@ -1,0 +1,234 @@
+// spatialbox_tests.nv — the algebra every tree in this package is
+// built out of.
+//
+// RED ON PURPOSE: every assertion reaches `not implemented:
+// spatial-nv.spatialbox.<fn>`.
+//
+// Every number below is exact.  The distance cases are built on the
+// 3-4-5 right triangle, so no assertion here depends on a tolerance
+// that hides an arithmetic mistake.
+
+use std.test
+use spatialbox
+
+fn unit_box() -> SpatialBox
+    match spatialbox.box_of([0.0, 0.0], [1.0, 1.0])
+        Ok(b)  => b
+        Err(_) => SpatialBox { lower: [0.0, 0.0], upper: [0.0, 0.0] }
+
+fn at(x: Float, y: Float) -> SpatialPoint
+    match spatialbox.point([x, y])
+        Ok(p)  => p
+        Err(_) => SpatialPoint { coords: [0.0, 0.0] }
+
+@test
+fn test_a_point_and_a_box_are_made_from_plain_numbers() [io]
+    test.case("a point is its coordinates, in the caller's own order and units")
+    match spatialbox.point([3.0, 4.0])
+        Err(e) => test.fail(e.message())
+        Ok(p)  =>
+            test.assert(spatialbox.point_dimension(p) == 2)
+            test.assert(p.coords == [3.0, 4.0])
+
+    test.case("there is no zero-dimensional space to index")
+    match spatialbox.point([])
+        Ok(_)  => test.fail("a point with no coordinates is not a position")
+        Err(_) => test.assert(true)
+
+    test.case("a box is two corners of the same dimension")
+    match spatialbox.box_of([0.0, 0.0], [2.0, 3.0])
+        Err(e) => test.fail(e.message())
+        Ok(b)  => test.assert(spatialbox.dimension(b) == 2)
+
+@test
+fn test_a_box_whose_lower_bound_is_above_its_upper_is_refused() [io]
+    // A box that spans the antimeridian in degrees looks exactly like
+    // this, which is why it is named in the README rather than
+    // silently accepted here.
+    test.case("a swapped pair on the second axis")
+    match spatialbox.box_of([0.0, 5.0], [1.0, 2.0])
+        Ok(_)  => test.fail("5 is not below 2")
+        Err(_) => test.assert(true)
+
+    test.case("mismatched corner lengths")
+    match spatialbox.box_of([0.0, 0.0], [1.0])
+        Ok(_)  => test.fail("two corners of different dimensions name no box")
+        Err(_) => test.assert(true)
+
+    test.case("but a box of no width on an axis is legal — that is what a segment's bound looks like")
+    match spatialbox.box_of([0.0, 0.0], [0.0, 3.0])
+        Err(e) => test.fail(e.message())
+        Ok(b)  => test.assert(spatialbox.area(b) == 0.0)
+
+@test
+fn test_the_box_around_a_point_has_no_width_and_holds_that_point() [io]
+    test.case("it is how a point goes into an R-tree, which keys everything by a box")
+    let b = spatialbox.box_around(at(1.0, 2.0))
+    test.assert(spatialbox.area(b) == 0.0)
+    match spatialbox.contains_point(b, at(1.0, 2.0))
+        Err(e)  => test.fail(e.message())
+        Ok(yes) => test.assert(yes)
+
+@test
+fn test_union_and_intersection() [io]
+    test.case("the union of two unit boxes two apart is a three-by-three box")
+    match spatialbox.box_of([2.0, 2.0], [3.0, 3.0])
+        Err(e)  => test.fail(e.message())
+        Ok(far) =>
+            match spatialbox.union(unit_box(), far)
+                Err(e) => test.fail(e.message())
+                Ok(u)  => test.assert(spatialbox.area(u) == 9.0)
+
+    test.case("two boxes overlapping by one unit intersect in a unit square")
+    match spatialbox.box_of([0.0, 0.0], [2.0, 2.0])
+        Err(e) => test.fail(e.message())
+        Ok(a)  =>
+            match spatialbox.box_of([1.0, 1.0], [3.0, 3.0])
+                Err(e) => test.fail(e.message())
+                Ok(b)  =>
+                    match spatialbox.intersection(a, b)
+                        Err(e)      => test.fail(e.message())
+                        Ok(None)    => test.fail("these two overlap")
+                        Ok(Some(i)) => test.assert(spatialbox.area(i) == 1.0)
+
+    test.case("and disjoint boxes intersect in None rather than in a box of negative width")
+    match spatialbox.box_of([9.0, 9.0], [10.0, 10.0])
+        Err(e)  => test.fail(e.message())
+        Ok(far) =>
+            match spatialbox.intersection(unit_box(), far)
+                Err(e)      => test.fail(e.message())
+                Ok(Some(_)) => test.fail("these two are disjoint")
+                Ok(None)    => test.assert(true)
+
+@test
+fn test_touching_counts_as_overlapping_and_the_boundary_is_inside() [io]
+    // The convention a query boundary turns on, asserted rather than
+    // only written down.
+    test.case("two boxes meeting exactly at a face overlap")
+    match spatialbox.box_of([1.0, 0.0], [2.0, 1.0])
+        Err(e)      => test.fail(e.message())
+        Ok(next_to) =>
+            match spatialbox.overlaps(unit_box(), next_to)
+                Err(e)  => test.fail(e.message())
+                Ok(yes) => test.assert(yes)
+
+    test.case("and a point on the boundary is inside")
+    match spatialbox.contains_point(unit_box(), at(1.0, 1.0))
+        Err(e)  => test.fail(e.message())
+        Ok(yes) => test.assert(yes)
+
+    test.case("a point outside is not")
+    match spatialbox.contains_point(unit_box(), at(1.5, 0.5))
+        Err(e)  => test.fail(e.message())
+        Ok(yes) => test.assert(not yes)
+
+@test
+fn test_contains_box_is_what_lets_a_range_query_stop_descending() [io]
+    test.case("a four-by-four box holds a unit box inside it")
+    match spatialbox.box_of([0.0, 0.0], [4.0, 4.0])
+        Err(e)    => test.fail(e.message())
+        Ok(outer) =>
+            match spatialbox.box_of([1.0, 1.0], [2.0, 2.0])
+                Err(e)    => test.fail(e.message())
+                Ok(inner) =>
+                    match spatialbox.contains_box(outer, inner)
+                        Err(e)  => test.fail(e.message())
+                        Ok(yes) => test.assert(yes)
+
+    test.case("and does not hold one that sticks out")
+    match spatialbox.box_of([0.0, 0.0], [4.0, 4.0])
+        Err(e)    => test.fail(e.message())
+        Ok(outer) =>
+            match spatialbox.box_of([3.0, 3.0], [5.0, 5.0])
+                Err(e)   => test.fail(e.message())
+                Ok(over) =>
+                    match spatialbox.contains_box(outer, over)
+                        Err(e)  => test.fail(e.message())
+                        Ok(yes) => test.assert(not yes)
+
+@test
+fn test_area_margin_centre_and_enlargement() [io]
+    test.case("area is the product of the widths, margin their sum")
+    match spatialbox.box_of([0.0, 0.0], [2.0, 3.0])
+        Err(e) => test.fail(e.message())
+        Ok(b)  =>
+            test.assert(spatialbox.area(b) == 6.0)
+            test.assert(spatialbox.margin(b) == 5.0)
+            test.assert(spatialbox.centre(b).coords == [1.0, 1.5])
+
+    test.case("enlargement is what an R-tree insertion minimises")
+    match spatialbox.box_of([1.0, 1.0], [2.0, 2.0])
+        Err(e)    => test.fail(e.message())
+        Ok(extra) =>
+            match spatialbox.enlargement(unit_box(), extra)
+                Err(e)   => test.fail(e.message())
+                Ok(grew) => test.assert(grew == 3.0)
+
+    test.case("and a box that already holds the addition grows by nothing")
+    match spatialbox.box_of([4.0, 4.0], [6.0, 6.0])
+        Err(e)  => test.fail(e.message())
+        Ok(big) =>
+            match spatialbox.box_of([5.0, 5.0], [5.5, 5.5])
+                Err(e)    => test.fail(e.message())
+                Ok(small) =>
+                    match spatialbox.enlargement(big, small)
+                        Err(e)   => test.fail(e.message())
+                        Ok(grew) => test.assert(grew == 0.0)
+
+@test
+fn test_every_distance_is_planar_and_exact_on_a_three_four_five_triangle() [io]
+    test.case("point to point")
+    match spatialbox.point_distance(at(0.0, 0.0), at(3.0, 4.0))
+        Err(e) => test.fail(e.message())
+        Ok(d)  => test.assert(d == 5.0)
+
+    test.case("box to point: from the unit box's far corner to (4, 5) is 3 and 4 again")
+    match spatialbox.distance_to_point(unit_box(), at(4.0, 5.0))
+        Err(e) => test.fail(e.message())
+        Ok(d)  => test.assert(d == 5.0)
+
+    test.case("a point inside the box is at distance zero")
+    match spatialbox.distance_to_point(unit_box(), at(0.5, 0.5))
+        Err(e) => test.fail(e.message())
+        Ok(d)  => test.assert(d == 0.0)
+
+    test.case("and a point on the boundary is too")
+    match spatialbox.distance_to_point(unit_box(), at(1.0, 0.5))
+        Err(e) => test.fail(e.message())
+        Ok(d)  => test.assert(d == 0.0)
+
+    test.case("box to box: two unit boxes three apart on one axis")
+    match spatialbox.box_of([4.0, 0.0], [5.0, 1.0])
+        Err(e)  => test.fail(e.message())
+        Ok(far) =>
+            match spatialbox.box_distance(unit_box(), far)
+                Err(e) => test.fail(e.message())
+                Ok(d)  => test.assert(d == 3.0)
+
+    test.case("and two boxes that overlap are at distance zero")
+    match spatialbox.box_of([0.5, 0.5], [2.0, 2.0])
+        Err(e)   => test.fail(e.message())
+        Ok(over) =>
+            match spatialbox.box_distance(unit_box(), over)
+                Err(e) => test.fail(e.message())
+                Ok(d)  => test.assert(d == 0.0)
+
+@test
+fn test_two_things_of_different_dimensions_are_never_compared() [io]
+    // The alternative to refusing is to compare the axes they have in
+    // common and answer confidently about the wrong thing.
+    test.case("a two-dimensional box against a three-dimensional one")
+    match spatialbox.box_of([0.0, 0.0, 0.0], [1.0, 1.0, 1.0])
+        Err(e)   => test.fail(e.message())
+        Ok(cube) =>
+            match spatialbox.overlaps(unit_box(), cube)
+                Ok(_)  => test.fail("a square and a cube are not comparable")
+                Err(_) => test.assert(true)
+
+    test.case("and a two-dimensional box against a three-dimensional point")
+    match spatialbox.point([0.0, 0.0, 0.0])
+        Err(e) => test.fail(e.message())
+        Ok(p)  =>
+            match spatialbox.distance_to_point(unit_box(), p)
+                Ok(_)  => test.fail("a square and a point in space are not comparable")
+                Err(_) => test.assert(true)

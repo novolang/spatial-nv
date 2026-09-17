@@ -1,0 +1,55 @@
+// spatialfault_tests.nv — a refusal names the call, and an empty
+// result is not one.
+//
+// RED ON PURPOSE: every assertion reaches `not implemented:
+// spatial-nv.SpatialFault.message`.  What is asserted is the one rule
+// the `Error` implementation has to follow: the message says what
+// about the CALL was wrong and carries the numbers that make it wrong,
+// so a reader does not have to guess which of two arguments was built
+// from the wrong data set.
+
+use std.test
+
+@test
+fn test_a_malformed_box_names_the_axis_and_both_bounds() [io]
+    // A box built from a swapped pair of coordinates is the usual
+    // cause, and the axis is what says which pair.
+    test.case("the axis and the two numbers are all in the message")
+    let b = SpatialBadBox(1, 5.0, 2.0)
+    test.assert(str.contains(b.message(), "1"))
+    test.assert(str.contains(b.message(), "5"))
+    test.assert(str.contains(b.message(), "2"))
+
+@test
+fn test_a_dimension_mismatch_carries_both_dimensions() [io]
+    test.case("what was expected and what arrived")
+    let d = SpatialDimensionMismatch(2, 3)
+    test.assert(str.contains(d.message(), "2"))
+    test.assert(str.contains(d.message(), "3"))
+
+    test.case("and a zero-dimensional space has its own arm, because there is no number to print")
+    test.assert(str.len(SpatialEmptyDimension.message()) > 0)
+
+@test
+fn test_the_settings_that_describe_no_index_or_no_query() [io]
+    test.case("a capacity of one makes a tree that is a linked list")
+    let c = SpatialBadCapacity(1, 2)
+    test.assert(str.contains(c.message(), "1"))
+    test.assert(str.contains(c.message(), "2"))
+
+    test.case("a negative radius is usually a subtraction the wrong way round")
+    test.assert(str.contains(SpatialNegativeRadius(-3.0).message(), "3"))
+
+    test.case("and a negative k names no query, while zero is a legal query")
+    test.assert(str.contains(SpatialNegativeCount(-1).message(), "1"))
+
+@test
+fn test_the_two_handle_faults_name_the_handle() [io]
+    // A caller reconciling its own list against the index needs to
+    // know WHICH handle, and a silent no-op on either would hide a bug
+    // in the caller's bookkeeping.
+    test.case("a duplicate would make every later query ambiguous")
+    test.assert(str.contains(SpatialDuplicateHandle(7).message(), "7"))
+
+    test.case("and a removal of something that is not there says which")
+    test.assert(str.contains(SpatialHandleNotPresent(9).message(), "9"))

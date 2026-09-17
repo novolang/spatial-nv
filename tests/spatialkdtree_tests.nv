@@ -1,0 +1,206 @@
+// spatialkdtree_tests.nv — points only, one axis per level, and a
+// median that makes the tree deterministic.
+//
+// RED ON PURPOSE: every assertion reaches `not implemented:
+// spatial-nv.spatialkdtree.<fn>`.
+//
+// THE FIXTURE: seven points whose median split is determined at every
+// level.  On the x axis they are 1, 2, 3, 4, 5, 6, 7, so the root is
+// the point at x = 4 and each half has three points, giving a tree
+// exactly three levels deep.  A reader can draw it; so can a test.
+
+use std.test
+use spatialkdtree
+use spatialbox
+
+fn at(x: Float, y: Float) -> SpatialPoint
+    match spatialbox.point([x, y])
+        Ok(p)  => p
+        Err(_) => SpatialPoint { coords: [0.0, 0.0] }
+
+fn seven_points() -> [KdTreeItem]
+    [spatialkdtree.item(0, at(1.0, 7.0)),
+     spatialkdtree.item(1, at(2.0, 3.0)),
+     spatialkdtree.item(2, at(3.0, 6.0)),
+     spatialkdtree.item(3, at(4.0, 1.0)),
+     spatialkdtree.item(4, at(5.0, 5.0)),
+     spatialkdtree.item(5, at(6.0, 2.0)),
+     spatialkdtree.item(6, at(7.0, 4.0))]
+
+@test
+fn test_an_item_is_a_position_and_a_handle() [io]
+    test.case("the handle goes in and comes out unchanged")
+    let i = spatialkdtree.item(5, at(1.0, 2.0))
+    test.assert(i.handle == 5)
+    test.assert(i.position.coords == [1.0, 2.0])
+
+@test
+fn test_an_empty_tree_is_a_working_tree() [io]
+    test.case("build of nothing is an answer, not a failure")
+    match spatialkdtree.build([])
+        Err(e) => test.fail(e.message())
+        Ok(ix) =>
+            test.assert(spatialkdtree.size(ix) == 0)
+            test.assert(spatialkdtree.is_empty(ix))
+            test.assert(spatialkdtree.depth(ix) == 0)
+            test.assert_none(ix.root)
+            test.assert(list.len(spatialkdtree.items(ix)) == 0)
+            test.assert(list.len(spatialkdtree.handles(ix)) == 0)
+
+    test.case("and `empty` is the call that also fixes the dimension")
+    match spatialkdtree.empty(3)
+        Err(e) => test.fail(e.message())
+        Ok(ix) =>
+            test.assert(ix.dimension == 3)
+            test.assert(spatialkdtree.is_empty(ix))
+
+    test.case("a dimension below one names no space")
+    match spatialkdtree.empty(0)
+        Ok(_)  => test.fail("there is no zero-dimensional space to index")
+        Err(_) => test.assert(true)
+
+@test
+fn test_the_median_build_is_balanced_and_the_root_is_the_middle_point() [io]
+    // Seven points, spread 1 to 7 on the x axis: the root splits on x
+    // at the median, which is the point at x = 4, and the tree is
+    // exactly three levels deep.
+    test.case("seven points in, seven out")
+    match spatialkdtree.build(seven_points())
+        Err(e) => test.fail(e.message())
+        Ok(ix) =>
+            test.assert(spatialkdtree.size(ix) == 7)
+            test.assert(not spatialkdtree.is_empty(ix))
+
+    test.case("the root splits on the first axis, at the median x")
+    match spatialkdtree.build(seven_points())
+        Err(e) => test.fail(e.message())
+        Ok(ix) =>
+            match ix.root
+                None    => test.fail("seven points make a root")
+                Some(n) =>
+                    test.assert(n.axis == 0)
+                    test.assert(n.item.position.coords[0] == 4.0)
+                    test.assert(n.item.handle == 3)
+
+    test.case("and the tree is balanced: three levels for seven points, not seven")
+    match spatialkdtree.build(seven_points())
+        Err(e) => test.fail(e.message())
+        Ok(ix) => test.assert(spatialkdtree.depth(ix) == 3)
+
+@test
+fn test_the_build_is_deterministic_because_the_split_is_a_median() [io]
+    // There is no random pivot anywhere, which is what a `core`
+    // package requires and what lets this assertion exist at all.
+    test.case("the same points in a different order give the same root")
+    match spatialkdtree.build(seven_points())
+        Err(e)    => test.fail(e.message())
+        Ok(first) =>
+            match spatialkdtree.build(list.reverse(seven_points()))
+                Err(e)     => test.fail(e.message())
+                Ok(second) =>
+                    match first.root
+                        None    => test.fail("seven points make a root")
+                        Some(a) =>
+                            match second.root
+                                None    => test.fail("seven points make a root")
+                                Some(b) => test.assert(a.item.handle == b.item.handle)
+
+@test
+fn test_build_refuses_the_inputs_that_describe_no_index() [io]
+    test.case("two items claiming the same handle")
+    match spatialkdtree.build([spatialkdtree.item(1, at(0.0, 0.0)), spatialkdtree.item(1, at(1.0, 1.0))])
+        Ok(_)  => test.fail("a handle identifies one item")
+        Err(_) => test.assert(true)
+
+    test.case("points of mixed dimension are not one index")
+    match spatialbox.point([0.0, 0.0, 0.0])
+        Err(e)       => test.fail(e.message())
+        Ok(in_space) =>
+            match spatialkdtree.build([spatialkdtree.item(0, at(0.0, 0.0)), spatialkdtree.item(1, in_space)])
+                Ok(_)  => test.fail("a plane and a space do not belong to one index")
+                Err(_) => test.assert(true)
+
+@test
+fn test_insertion_grows_the_tree_and_does_not_rebalance_it() [io]
+    // The cost a caller has to know about: points inserted in sorted
+    // order build a tree that is a linked list, and `depth` against
+    // `size` is how a caller notices.
+    test.case("one insert into an empty index")
+    match spatialkdtree.empty(2)
+        Err(e) => test.fail(e.message())
+        Ok(ix) =>
+            match spatialkdtree.insert(ix, spatialkdtree.item(0, at(1.0, 1.0)))
+                Err(e)    => test.fail(e.message())
+                Ok(grown) =>
+                    test.assert(spatialkdtree.size(grown) == 1)
+                    test.assert(spatialkdtree.depth(grown) == 1)
+                    test.assert(spatialkdtree.size(ix) == 0)
+
+    test.case("seven points inserted in sorted order make a tree seven levels deep")
+    match spatialkdtree.empty(2)
+        Err(e)    => test.fail(e.message())
+        Ok(start) =>
+            var ix = start
+            var ok = true
+            for entry in seven_points()
+                match spatialkdtree.insert(ix, entry)
+                    Err(_)   =>
+                        ok = false
+                    Ok(next) =>
+                        ix = next
+            test.assert(ok)
+            test.assert(spatialkdtree.size(ix) == 7)
+            test.assert(spatialkdtree.depth(ix) == 7)
+
+    test.case("which is why `items` plus `build` is the rebuild, and it comes back balanced")
+    match spatialkdtree.build(seven_points())
+        Err(e) => test.fail(e.message())
+        Ok(ix) =>
+            match spatialkdtree.build(spatialkdtree.items(ix))
+                Err(e)      => test.fail(e.message())
+                Ok(rebuilt) =>
+                    test.assert(spatialkdtree.size(rebuilt) == 7)
+                    test.assert(spatialkdtree.depth(rebuilt) == 3)
+
+    test.case("a handle already in the index is refused")
+    match spatialkdtree.build(seven_points())
+        Err(e) => test.fail(e.message())
+        Ok(ix) =>
+            match spatialkdtree.insert(ix, spatialkdtree.item(3, at(9.0, 9.0)))
+                Ok(_)  => test.fail("handle 3 is already indexed")
+                Err(_) => test.assert(true)
+
+    test.case("and a point of the wrong dimension is refused")
+    match spatialkdtree.empty(2)
+        Err(e) => test.fail(e.message())
+        Ok(ix) =>
+            match spatialbox.point([0.0, 0.0, 0.0])
+                Err(e) => test.fail(e.message())
+                Ok(p)  =>
+                    match spatialkdtree.insert(ix, spatialkdtree.item(0, p))
+                        Ok(_)  => test.fail("a point in space does not go into a plane's index")
+                        Err(_) => test.assert(true)
+
+@test
+fn test_handles_and_items_carry_everything_back_out() [io]
+    test.case("seven of each")
+    match spatialkdtree.build(seven_points())
+        Err(e) => test.fail(e.message())
+        Ok(ix) =>
+            test.assert(list.len(spatialkdtree.items(ix)) == 7)
+            test.assert(list.len(spatialkdtree.handles(ix)) == 7)
+            test.assert(list.contains(spatialkdtree.handles(ix), 6))
+
+@test
+fn test_the_axis_cycles_with_the_depth() [io]
+    // The rule the whole structure turns on, so that a caller reading
+    // a tree can work out what any node means.
+    test.case("in two dimensions the axes alternate")
+    test.assert(spatialkdtree.axis_at_depth(0, 2) == 0)
+    test.assert(spatialkdtree.axis_at_depth(1, 2) == 1)
+    test.assert(spatialkdtree.axis_at_depth(2, 2) == 0)
+    test.assert(spatialkdtree.axis_at_depth(3, 2) == 1)
+
+    test.case("in three they go round in threes")
+    test.assert(spatialkdtree.axis_at_depth(3, 3) == 0)
+    test.assert(spatialkdtree.axis_at_depth(4, 3) == 1)

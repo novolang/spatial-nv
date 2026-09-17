@@ -1,0 +1,78 @@
+// spatialfault.nv — the eight ways a call is refused, and why "not
+// found" is not one of them.
+//
+// AN EMPTY ANSWER IS AN ANSWER.  A nearest-neighbour query on an empty
+// index, a range query whose area holds nothing, a k-nearest query
+// asking for ten hits out of an index of three — none of those is a
+// failure.  Each of them has a correct result that the caller can use:
+// `None`, an empty list, and three hits.  A library that returns an
+// error for any of them makes every caller write a match for a case
+// that is not exceptional, and the commonest of them — a query that
+// finds nothing — is the one a spatial index is asked most often.
+//
+// WHAT IS LEFT is the set of calls that describe no index and no
+// query: a box whose lower corner is above its upper, a point of a
+// different dimension than the index it is being looked up in, a
+// negative radius, a node capacity of one.  Every one of them is a
+// mistake in the CALL rather than a fact about the data, and every one
+// of them is worth finding before the first comparison rather than in
+// a wrong answer afterwards.
+//
+// WHY EVERY VARIANT CARRIES ITS NUMBERS.  A dimension mismatch whose
+// message does not print both dimensions sends the reader back to the
+// source to work out which of the two arguments was built wrong, and
+// the answer is usually that one of them came from a different data
+// set than the reader thought.
+
+// Why a spatial call could not be made.
+//
+// ```novo
+// use spatialfault
+//
+// fn main() [io]
+//     let e = SpatialDimensionMismatch(2, 3)
+//     println(e.message())
+// ```
+pub enum SpatialFault
+    // A box whose lower bound on some axis is above its upper bound.
+    // Carries the axis and the two numbers, because a box built from
+    // a swapped pair of coordinates is the usual cause and the axis
+    // says which pair.
+    SpatialBadBox(axis: Int, lower: Float, upper: Float)
+    // A box or a point of a different dimension than the thing it was
+    // used with.  Carries what was expected and what arrived.
+    SpatialDimensionMismatch(want: Int, got: Int)
+    // A box or a point with no coordinates at all.  There is no
+    // zero-dimensional space to index.
+    SpatialEmptyDimension
+    // A node capacity below 2.  A node that holds one entry makes a
+    // tree that is a linked list, which is a correct index and a
+    // useless one, so it is refused rather than accepted quietly.
+    // Carries what was given and the minimum.
+    SpatialBadCapacity(given: Int, minimum: Int)
+    // A radius query with a negative radius.  Carries it, because a
+    // negative radius is almost always a subtraction that came out the
+    // wrong way round.
+    SpatialNegativeRadius(radius: Float)
+    // A k-nearest query with a negative `k`.  Zero is allowed and
+    // answers nothing; below zero names no query.
+    SpatialNegativeCount(k: Int)
+    // An insertion of a handle the index already holds.  A handle is
+    // the caller's own index into its own list, so a duplicate means
+    // two different boxes claim to be the same item and every query
+    // afterwards would be ambiguous.
+    SpatialDuplicateHandle(handle: Int)
+    // A removal of a handle the index does not hold.  Carries it, so
+    // the message can say which one, which is what a caller
+    // reconciling its own list against the index needs.
+    SpatialHandleNotPresent(handle: Int)
+
+// `SpatialFault` is an `Error`, which is what lets
+// `Result<T, SpatialFault>` exist at all (SPEC § 3.4).
+impl Error for SpatialFault
+    // The one-line message: what about the call was wrong, and the
+    // numbers that make it wrong.
+    //
+    // Panics with `not implemented` until the bodies land.
+    fn message(self) -> Str
+        todo("spatial-nv.SpatialFault.message")

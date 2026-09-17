@@ -1,0 +1,378 @@
+// spatialrtree.nv — the R-tree, and the handle that is all it keeps of
+// the caller's item.
+//
+// THE INDEX DOES NOT HOLD THE CALLER'S ITEMS.  An `RtreeEntry` is a
+// box and an `Int`, and the `Int` is the item's position in the
+// caller's own list.  A query answers handles; the caller reads its own
+// values out of its own list.  Nothing in this package ever sees a
+// road, a photograph, a customer or whatever the boxes stand for.
+//
+// That is the decision everything else here follows from, and it was
+// forced as much as chosen.  The alternative — `RtreeIndex<T>` holding
+// the items themselves — is what every library in a language with
+// working generics does, and it is not available: ndarray-nv measured
+// this toolchain and published the result, which is that a generic
+// container crossing a module boundary stops the compiler with E6000
+// or lowers its result as a pointer and fails IR verification, and
+// that a library is nothing BUT a module boundary.  So a generic index
+// would be a type nobody outside this package could call.
+//
+// The handle is better than a consolation prize, and the README says
+// why: an item can be in three indexes at once without being stored
+// three times, an index can be built over a list the caller is also
+// using for something else, and the index's memory is proportional to
+// the number of items rather than to their size.  What the caller owes
+// in exchange is that the handles stay valid — if the list is
+// reordered, the index is stale, and the README says that too.
+//
+// WHY THE NODE IS A REAL TREE AND NOT A FLAT ARENA.  A recursive
+// struct — one holding a list of itself — was measured against this
+// toolchain before this shape was written: declared, constructed,
+// matched, recursed over and run, in one module and across a module
+// boundary.  It works, so the node here is the honest shape rather
+// than nodes in a list with children by index, which is what a
+// package written around a missing feature would have had to ship.
+//
+// A LEAF HOLDS ENTRIES AND A BRANCH HOLDS CHILDREN.  One struct with
+// both lists, exactly one of them non-empty, rather than two types or
+// an enum with two arms — because every operation on a node starts by
+// asking which it is, and `is_leaf` is that question asked once.
+
+// One indexed item: where it is, and which item it is.
+//
+// ```novo
+// use spatialrtree
+// use spatialbox
+//
+// fn main() [io]
+//     match spatialbox.box_of([0.0, 0.0], [1.0, 1.0])
+//         Ok(b)  => println("${spatialrtree.entry(7, b).handle}")   // 7
+//         Err(e) => println(e.message())
+// ```
+pub struct RtreeEntry
+    // The caller's own index into the caller's own list.  This
+    // package never dereferences it and never checks it against
+    // anything; it is carried and handed back.
+    handle: Int
+    // The box this item occupies.  For a point, the box of no width
+    // around it — `spatialbox.box_around` builds one.
+    bounds: SpatialBox
+
+// A node of the tree: either a leaf holding entries, or a branch
+// holding children.
+//
+// Exactly one of `entries` and `children` is non-empty, except in the
+// root of an empty index where both are. `is_leaf` is the question
+// every operation on a node asks first.
+//
+// ```novo
+// use spatialrtree
+//
+// fn main() [io]
+//     match spatialrtree.empty(2, 8)
+//         Ok(ix) => println("${spatialrtree.is_leaf(ix.root)}")   // true
+//         Err(e) => println(e.message())
+// ```
+pub struct RtreeNode
+    // The smallest box holding everything under this node. For a
+    // branch it is the union of its children's boxes; for a leaf, of
+    // its entries'.
+    bounds: SpatialBox
+    // The items, when this is a leaf. Empty in a branch.
+    entries: [RtreeEntry]
+    // The subtrees, when this is a branch. Empty in a leaf.
+    children: [RtreeNode]
+
+// An R-tree over boxes.
+//
+// ```novo
+// use spatialrtree
+//
+// fn main() [io]
+//     match spatialrtree.empty(2, spatialrtree.default_capacity())
+//         Ok(ix) => println("${spatialrtree.size(ix)}")   // 0
+//         Err(e) => println(e.message())
+// ```
+pub struct RtreeIndex
+    // The root. An index of one item is a root that is a leaf holding
+    // one entry.
+    root: RtreeNode
+    // The largest number of entries a leaf or children a branch may
+    // hold before it splits. At least 2.
+    capacity: Int
+    // How many axes every box in this index has. Fixed when the index
+    // is made, and every later box is checked against it.
+    dimension: Int
+    // How many entries are in the index, counted across every leaf.
+    size: Int
+
+// An entry from a handle and a box.
+//
+// ```novo
+// use spatialrtree
+// use spatialbox
+//
+// fn main() [io]
+//     match spatialbox.box_of([2.0, 2.0], [3.0, 3.0])
+//         Ok(b)  => println("${spatialrtree.entry(0, b).handle}")   // 0
+//         Err(e) => println(e.message())
+// ```
+pub fn entry(handle: Int, bounds: SpatialBox) -> RtreeEntry
+    todo("spatial-nv.spatialrtree.entry")
+
+// The node capacity to use when there is no reason to choose another:
+// 8.
+//
+// A capacity is a trade between the depth of the tree and the work
+// done at each node, and 8 is in the middle of the range every
+// published measurement puts the optimum in. It is a function rather
+// than a number in a doc comment so that a caller can pass it on
+// without copying a constant that may move.
+//
+// ```novo
+// use spatialrtree
+//
+// fn main() [io]
+//     println("${spatialrtree.default_capacity()}")   // 8
+// ```
+pub fn default_capacity() -> Int
+    todo("spatial-nv.spatialrtree.default_capacity")
+
+// An empty index over boxes of this dimension.
+//
+// The starting point for the incremental path. `SpatialBadCapacity`
+// when the capacity is below 2, and `SpatialEmptyDimension` when the
+// dimension is below 1.
+//
+// ```novo
+// use spatialrtree
+//
+// fn main() [io]
+//     match spatialrtree.empty(2, 8)
+//         Ok(ix) => println("${spatialrtree.size(ix)}")   // 0
+//         Err(e) => println(e.message())
+// ```
+pub fn empty(dimension: Int, capacity: Int) -> Result<RtreeIndex, SpatialFault>
+    todo("spatial-nv.spatialrtree.empty")
+
+// An index built in one pass over a known set, by Sort-Tile-Recursive
+// packing.
+//
+// THE CONSTRUCTOR TO USE WHEN THE SET IS KNOWN. STR sorts the entries
+// by the first coordinate of their centres, cuts them into vertical
+// slices, sorts each slice by the next coordinate, and fills leaves
+// from the result — so every leaf is full and the boxes overlap much
+// less than the same entries inserted one at a time would produce.
+// The tree is shallower and every query touches fewer nodes.
+//
+// `SpatialDimensionMismatch` when the entries do not all have the same
+// dimension; `SpatialDuplicateHandle` when two entries claim the same
+// handle. An empty list gives an empty index, which is an answer and
+// not a failure — but the dimension cannot be inferred from nothing,
+// so an empty list is `SpatialEmptyDimension` and `empty` is the call
+// for that case.
+//
+// ```novo
+// use spatialrtree
+// use spatialbox
+//
+// fn main() [io]
+//     match spatialbox.box_of([0.0, 0.0], [1.0, 1.0])
+//         Err(e) => println(e.message())
+//         Ok(b)  =>
+//             match spatialrtree.bulk_load([spatialrtree.entry(0, b)], 8)
+//                 Ok(ix) => println("${spatialrtree.size(ix)}")   // 1
+//                 Err(e) => println(e.message())
+// ```
+pub fn bulk_load(entries: [RtreeEntry], capacity: Int) -> Result<RtreeIndex, SpatialFault>
+    todo("spatial-nv.spatialrtree.bulk_load")
+
+// The index with one more entry in it.
+//
+// THE CONSTRUCTOR TO USE WHEN THE SET GROWS. The insertion descends
+// the subtree whose box would have to grow least — `spatialbox.enlargement`
+// is that quantity — and splits a node that overflows. The result is a
+// correct index that is measurably worse balanced than the same
+// entries bulk-loaded, which is the trade the two constructors exist
+// to let a caller make.
+//
+// The index is a value and this answers a new one; nothing is written
+// in place, which is what keeps the package `[]`.
+//
+// `SpatialDimensionMismatch` when the entry's box has a different
+// dimension than the index; `SpatialDuplicateHandle` when the handle
+// is already in it.
+//
+// ```novo
+// use spatialrtree
+// use spatialbox
+//
+// fn main() [io]
+//     match spatialrtree.empty(2, 8)
+//         Err(e) => println(e.message())
+//         Ok(ix) =>
+//             match spatialbox.box_of([0.0, 0.0], [1.0, 1.0])
+//                 Err(e) => println(e.message())
+//                 Ok(b)  =>
+//                     match spatialrtree.insert(ix, spatialrtree.entry(1, b))
+//                         Ok(grown) => println("${spatialrtree.size(grown)}")   // 1
+//                         Err(e)    => println(e.message())
+// ```
+pub fn insert(index: RtreeIndex, item: RtreeEntry) -> Result<RtreeIndex, SpatialFault>
+    todo("spatial-nv.spatialrtree.insert")
+
+// The index with all of these inserted, one at a time.
+//
+// The same result as calling `insert` in a loop, and it is here
+// because that loop is the commonest thing a caller writes. It is NOT
+// the same as `bulk_load` on the same entries: this keeps the existing
+// tree and adds to it, while `bulk_load` builds a new one from
+// everything at once and packs it better. A caller adding many entries
+// to a small index is usually better off collecting `handles` and the
+// new entries and bulk-loading the lot.
+//
+// ```novo
+// use spatialrtree
+// use spatialbox
+//
+// fn main() [io]
+//     match spatialrtree.empty(2, 8)
+//         Err(e) => println(e.message())
+//         Ok(ix) =>
+//             match spatialrtree.insert_all(ix, [])
+//                 Ok(same) => println("${spatialrtree.size(same)}")   // 0
+//                 Err(e)   => println(e.message())
+// ```
+pub fn insert_all(index: RtreeIndex, items: [RtreeEntry]) -> Result<RtreeIndex, SpatialFault>
+    todo("spatial-nv.spatialrtree.insert_all")
+
+// The index without this handle.
+//
+// `SpatialHandleNotPresent` when the handle is not in the index,
+// naming it — because a caller reconciling its own list against the
+// index needs to know which one went missing, and a silent no-op there
+// hides a bug in the caller's bookkeeping.
+//
+// Removing does not rebalance the whole tree. A long sequence of
+// removals leaves a tree worth rebuilding, and `handles` plus
+// `bulk_load` is how a caller rebuilds one.
+//
+// ```novo
+// use spatialrtree
+// use spatialbox
+//
+// fn main() [io]
+//     match spatialbox.box_of([0.0, 0.0], [1.0, 1.0])
+//         Err(e) => println(e.message())
+//         Ok(b)  =>
+//             match spatialrtree.bulk_load([spatialrtree.entry(4, b)], 8)
+//                 Err(e) => println(e.message())
+//                 Ok(ix) =>
+//                     match spatialrtree.remove(ix, 4)
+//                         Ok(smaller) => println("${spatialrtree.size(smaller)}")   // 0
+//                         Err(e)      => println(e.message())
+// ```
+pub fn remove(index: RtreeIndex, handle: Int) -> Result<RtreeIndex, SpatialFault>
+    todo("spatial-nv.spatialrtree.remove")
+
+// How many entries the index holds.
+//
+// ```novo
+// use spatialrtree
+//
+// fn main() [io]
+//     match spatialrtree.empty(3, 8)
+//         Ok(ix) => println("${spatialrtree.size(ix)}")   // 0
+//         Err(e) => println(e.message())
+// ```
+pub fn size(index: RtreeIndex) -> Int
+    todo("spatial-nv.spatialrtree.size")
+
+// How many levels the tree has: 1 for an index whose root is a leaf.
+//
+// It is here because it is the one number that says whether a tree is
+// worth rebuilding: a bulk-loaded index of a thousand entries at
+// capacity 8 is four levels deep, and the same entries inserted one at
+// a time can be six or seven.
+//
+// ```novo
+// use spatialrtree
+//
+// fn main() [io]
+//     match spatialrtree.empty(2, 8)
+//         Ok(ix) => println("${spatialrtree.depth(ix)}")   // 1
+//         Err(e) => println(e.message())
+// ```
+pub fn depth(index: RtreeIndex) -> Int
+    todo("spatial-nv.spatialrtree.depth")
+
+// The box holding everything in the index, or `None` when it is empty.
+//
+// `None` rather than a box of no width at the origin, because an empty
+// index has no extent and a box at the origin is a lie about where the
+// data is.
+//
+// ```novo
+// use spatialrtree
+// use spatialbox
+//
+// fn main() [io]
+//     match spatialrtree.empty(2, 8)
+//         Err(e) => println(e.message())
+//         Ok(ix) =>
+//             match spatialrtree.bounds(ix)
+//                 None    => println("empty")   // empty
+//                 Some(b) => println("${spatialbox.area(b)}")
+// ```
+pub fn bounds(index: RtreeIndex) -> ?SpatialBox
+    todo("spatial-nv.spatialrtree.bounds")
+
+// Every handle in the index, in no particular order.
+//
+// What a caller rebuilding an index needs, and what a caller
+// reconciling the index against its own list compares. The order is
+// the tree's, which is neither the insertion order nor the handle
+// order and is not promised to be stable across versions.
+//
+// ```novo
+// use spatialrtree
+//
+// fn main() [io]
+//     match spatialrtree.empty(2, 8)
+//         Ok(ix) => println("${list.len(spatialrtree.handles(ix))}")   // 0
+//         Err(e) => println(e.message())
+// ```
+pub fn handles(index: RtreeIndex) -> [Int]
+    todo("spatial-nv.spatialrtree.handles")
+
+// Every entry in the index, in no particular order.
+//
+// `handles` with the boxes still attached. This is what
+// `bulk_load` wants when a caller rebuilds an index that has been
+// inserted into and removed from until it is worth repacking.
+//
+// ```novo
+// use spatialrtree
+//
+// fn main() [io]
+//     match spatialrtree.empty(2, 8)
+//         Ok(ix) => println("${list.len(spatialrtree.entries(ix))}")   // 0
+//         Err(e) => println(e.message())
+// ```
+pub fn entries(index: RtreeIndex) -> [RtreeEntry]
+    todo("spatial-nv.spatialrtree.entries")
+
+// Whether this node is a leaf.
+//
+// The question every operation on a node asks first, written once.
+//
+// ```novo
+// use spatialrtree
+//
+// fn main() [io]
+//     match spatialrtree.empty(2, 8)
+//         Ok(ix) => println("${spatialrtree.is_leaf(ix.root)}")   // true
+//         Err(e) => println(e.message())
+// ```
+pub fn is_leaf(node: RtreeNode) -> Bool
+    todo("spatial-nv.spatialrtree.is_leaf")

@@ -1,0 +1,312 @@
+// spatialquery.nv — the four questions, asked of either tree.
+//
+// FOUR QUESTIONS, NOT ONE WITH A FLAG.  A spatial index is asked four
+// different things, and they differ in what they take and in what
+// their answers mean:
+//
+//   * RANGE — what is inside this box?  Takes an area, answers every
+//     handle that overlaps it, in no order.  The question a map draw
+//     asks: everything in the viewport.
+//   * RADIUS — what is within this distance of this point?  Takes a
+//     point and a distance, answers every handle inside it, with the
+//     distance attached.  The question "every shop within two
+//     kilometres" asks.
+//   * NEAREST — what is closest to this point?  Takes a point,
+//     answers one hit or none.
+//   * K-NEAREST — what are the closest k?  Takes a point and a count,
+//     answers at most k hits in increasing distance.
+//
+// A range query and a radius query look similar and are not the same
+// question: a box and a circle are different shapes, and the corner of
+// a box is further from its centre than its edge is.  A library that
+// offers one and tells the caller to approximate the other has moved
+// the geometry into every caller.
+//
+// A HIT CARRIES ITS DISTANCE.  The searches compute the distance in
+// order to rank and to prune, so throwing it away and answering bare
+// handles makes every caller compute it again — over items this
+// package deliberately does not hold, so the caller has to look each
+// one up first.  `SpatialHit` is a handle and the distance that was
+// already known.
+//
+// The range query is the exception: it answers bare handles, because
+// "inside this box" has no distance to report and inventing one would
+// be a number with no meaning.
+//
+// AN EMPTY ANSWER IS AN ANSWER.  Querying an empty index, a box that
+// holds nothing, a radius of zero, or asking for ten hits from an
+// index of three — all of these succeed.  They answer `None`, an empty
+// list, and three hits.  `spatialfault.nv`'s module comment says why
+// none of them is an error.
+//
+// DISTANCES ARE PLANAR, on every function here.  `spatialbox.nv`'s
+// module comment and the README say what that means for a caller
+// indexing longitude and latitude.
+
+// One result: which item, and how far away it was.
+//
+// ```novo
+// use spatialquery
+//
+// fn main() [io]
+//     let h = SpatialHit { handle: 3, distance: 5.0 }
+//     println("${h.handle} at ${h.distance}")   // 3 at 5
+// ```
+pub struct SpatialHit
+    // The caller's own handle, as it was put in.
+    handle: Int
+    // The planar distance from the query point, in the coordinates'
+    // own units.  Already computed by the search, so the caller does
+    // not compute it again.
+    distance: Float
+
+// Every handle in the R-tree whose box overlaps this area.
+//
+// No order.  Touching counts, on `spatialbox.overlaps`'s convention:
+// an item whose box meets the query area exactly at a face is a hit.
+//
+// `SpatialDimensionMismatch` when the area has a different dimension
+// than the index.  An empty index and an area that holds nothing both
+// answer an empty list.
+//
+// ```novo
+// use spatialquery
+// use spatialrtree
+// use spatialbox
+//
+// fn main() [io]
+//     match spatialrtree.empty(2, 8)
+//         Err(e) => println(e.message())
+//         Ok(ix) =>
+//             match spatialbox.box_of([0.0, 0.0], [1.0, 1.0])
+//                 Err(e) => println(e.message())
+//                 Ok(area) =>
+//                     match spatialquery.rtree_range(ix, area)
+//                         Ok(hits) => println("${list.len(hits)}")   // 0
+//                         Err(e)   => println(e.message())
+// ```
+pub fn rtree_range(index: RtreeIndex, area: SpatialBox) -> Result<[Int], SpatialFault>
+    todo("spatial-nv.spatialquery.rtree_range")
+
+// Every handle in the R-tree whose box contains this point.
+//
+// The special case of a range query whose area is a single point, and
+// the one a hit test asks: which polygons is the cursor over.  It is
+// its own function because the caller has a point and would otherwise
+// have to build a box of no width to ask.
+//
+// ```novo
+// use spatialquery
+// use spatialrtree
+// use spatialbox
+//
+// fn main() [io]
+//     match spatialrtree.empty(2, 8)
+//         Err(e) => println(e.message())
+//         Ok(ix) =>
+//             match spatialbox.point([0.5, 0.5])
+//                 Err(e) => println(e.message())
+//                 Ok(p)  =>
+//                     match spatialquery.rtree_containing(ix, p)
+//                         Ok(hits) => println("${list.len(hits)}")   // 0
+//                         Err(e)   => println(e.message())
+// ```
+pub fn rtree_containing(index: RtreeIndex, p: SpatialPoint) -> Result<[Int], SpatialFault>
+    todo("spatial-nv.spatialquery.rtree_containing")
+
+// The item in the R-tree whose box is closest to this point, or `None`
+// when the index is empty.
+//
+// Distance to a box is `spatialbox.distance_to_point`, so an item
+// whose box CONTAINS the point is at distance zero and ties with every
+// other item that contains it.  Which of a set of tied items is
+// answered is not promised.
+//
+// ```novo
+// use spatialquery
+// use spatialrtree
+// use spatialbox
+//
+// fn main() [io]
+//     match spatialrtree.empty(2, 8)
+//         Err(e) => println(e.message())
+//         Ok(ix) =>
+//             match spatialbox.point([0.0, 0.0])
+//                 Err(e) => println(e.message())
+//                 Ok(p)  =>
+//                     match spatialquery.rtree_nearest(ix, p)
+//                         Err(e)      => println(e.message())
+//                         Ok(None)    => println("nothing indexed")   // nothing indexed
+//                         Ok(Some(h)) => println("${h.handle}")
+// ```
+pub fn rtree_nearest(index: RtreeIndex, p: SpatialPoint) -> Result<?SpatialHit, SpatialFault>
+    todo("spatial-nv.spatialquery.rtree_nearest")
+
+// The `k` items in the R-tree closest to this point, in increasing
+// distance.
+//
+// AT MOST `k`: an index of three answers three when asked for ten,
+// which is the right answer and not an error.  `k` of 0 answers an
+// empty list; `SpatialNegativeCount` below that.
+//
+// ```novo
+// use spatialquery
+// use spatialrtree
+// use spatialbox
+//
+// fn main() [io]
+//     match spatialrtree.empty(2, 8)
+//         Err(e) => println(e.message())
+//         Ok(ix) =>
+//             match spatialbox.point([0.0, 0.0])
+//                 Err(e) => println(e.message())
+//                 Ok(p)  =>
+//                     match spatialquery.rtree_k_nearest(ix, p, 3)
+//                         Ok(hits) => println("${list.len(hits)}")   // 0
+//                         Err(e)   => println(e.message())
+// ```
+pub fn rtree_k_nearest(index: RtreeIndex, p: SpatialPoint,
+                       k: Int) -> Result<[SpatialHit], SpatialFault>
+    todo("spatial-nv.spatialquery.rtree_k_nearest")
+
+// Every item in the R-tree within `radius` of this point, in
+// increasing distance.
+//
+// A DIFFERENT QUESTION FROM A RANGE QUERY: this is a circle and that
+// is a box, and the corner of a box is further from its centre than
+// its edge.  A radius of exactly the distance to an item includes it.
+// `SpatialNegativeRadius` for a negative one; zero is allowed and
+// answers whatever is exactly at the point.
+//
+// ```novo
+// use spatialquery
+// use spatialrtree
+// use spatialbox
+//
+// fn main() [io]
+//     match spatialrtree.empty(2, 8)
+//         Err(e) => println(e.message())
+//         Ok(ix) =>
+//             match spatialbox.point([0.0, 0.0])
+//                 Err(e) => println(e.message())
+//                 Ok(p)  =>
+//                     match spatialquery.rtree_radius(ix, p, 2.5)
+//                         Ok(hits) => println("${list.len(hits)}")   // 0
+//                         Err(e)   => println(e.message())
+// ```
+pub fn rtree_radius(index: RtreeIndex, p: SpatialPoint,
+                    radius: Float) -> Result<[SpatialHit], SpatialFault>
+    todo("spatial-nv.spatialquery.rtree_radius")
+
+// Every handle in the k-d tree whose point is inside this box.
+//
+// The same question `rtree_range` asks, of the other tree.  Touching
+// counts: a point exactly on a face of the query box is inside it.
+//
+// ```novo
+// use spatialquery
+// use spatialkdtree
+// use spatialbox
+//
+// fn main() [io]
+//     match spatialkdtree.build([])
+//         Err(e) => println(e.message())
+//         Ok(ix) =>
+//             match spatialbox.box_of([0.0, 0.0], [1.0, 1.0])
+//                 Err(e) => println(e.message())
+//                 Ok(area) =>
+//                     match spatialquery.kdtree_range(ix, area)
+//                         Ok(hits) => println("${list.len(hits)}")   // 0
+//                         Err(e)   => println(e.message())
+// ```
+pub fn kdtree_range(index: KdTreeIndex, area: SpatialBox) -> Result<[Int], SpatialFault>
+    todo("spatial-nv.spatialquery.kdtree_range")
+
+// The point in the k-d tree closest to this one, or `None` when the
+// index is empty.
+//
+// Unlike the R-tree's, this distance is between two POINTS, so an
+// exact match is at distance zero and nothing else is.
+//
+// ```novo
+// use spatialquery
+// use spatialkdtree
+// use spatialbox
+//
+// fn main() [io]
+//     match spatialkdtree.build([])
+//         Err(e) => println(e.message())
+//         Ok(ix) =>
+//             match spatialbox.point([0.0, 0.0])
+//                 Err(e) => println(e.message())
+//                 Ok(p)  =>
+//                     match spatialquery.kdtree_nearest(ix, p)
+//                         Err(e)      => println(e.message())
+//                         Ok(None)    => println("nothing indexed")   // nothing indexed
+//                         Ok(Some(h)) => println("${h.handle}")
+// ```
+pub fn kdtree_nearest(index: KdTreeIndex, p: SpatialPoint) -> Result<?SpatialHit, SpatialFault>
+    todo("spatial-nv.spatialquery.kdtree_nearest")
+
+// The `k` points in the k-d tree closest to this one, in increasing
+// distance.
+//
+// At most `k`, on the same rule as `rtree_k_nearest`.
+//
+// ```novo
+// use spatialquery
+// use spatialkdtree
+// use spatialbox
+//
+// fn main() [io]
+//     match spatialkdtree.build([])
+//         Err(e) => println(e.message())
+//         Ok(ix) =>
+//             match spatialbox.point([0.0, 0.0])
+//                 Err(e) => println(e.message())
+//                 Ok(p)  =>
+//                     match spatialquery.kdtree_k_nearest(ix, p, 5)
+//                         Ok(hits) => println("${list.len(hits)}")   // 0
+//                         Err(e)   => println(e.message())
+// ```
+pub fn kdtree_k_nearest(index: KdTreeIndex, p: SpatialPoint,
+                        k: Int) -> Result<[SpatialHit], SpatialFault>
+    todo("spatial-nv.spatialquery.kdtree_k_nearest")
+
+// Every point in the k-d tree within `radius` of this one, in
+// increasing distance.
+//
+// ```novo
+// use spatialquery
+// use spatialkdtree
+// use spatialbox
+//
+// fn main() [io]
+//     match spatialkdtree.build([])
+//         Err(e) => println(e.message())
+//         Ok(ix) =>
+//             match spatialbox.point([0.0, 0.0])
+//                 Err(e) => println(e.message())
+//                 Ok(p)  =>
+//                     match spatialquery.kdtree_radius(ix, p, 1.0)
+//                         Ok(hits) => println("${list.len(hits)}")   // 0
+//                         Err(e)   => println(e.message())
+// ```
+pub fn kdtree_radius(index: KdTreeIndex, p: SpatialPoint,
+                     radius: Float) -> Result<[SpatialHit], SpatialFault>
+    todo("spatial-nv.spatialquery.kdtree_radius")
+
+// The handles of a list of hits, in the order the hits came in.
+//
+// For a caller that wanted the ranking but not the distances, so that
+// discarding them is one call rather than a fold at every query site.
+//
+// ```novo
+// use spatialquery
+//
+// fn main() [io]
+//     let hits = [SpatialHit { handle: 2, distance: 1.0 }, SpatialHit { handle: 7, distance: 3.0 }]
+//     println("${spatialquery.hit_handles(hits)}")   // [2, 7]
+// ```
+pub fn hit_handles(hits: [SpatialHit]) -> [Int]
+    todo("spatial-nv.spatialquery.hit_handles")

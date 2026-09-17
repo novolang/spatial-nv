@@ -1,0 +1,276 @@
+// spatialquery_tests.nv — the four questions, and the fact that an
+// empty answer is an answer.
+//
+// RED ON PURPOSE: every assertion reaches `not implemented:
+// spatial-nv.spatialquery.<fn>`.
+//
+// THE FIXTURE: five unit boxes in a row on the x axis at 0, 2, 4, 6
+// and 8, handles 0 to 4, and the same five positions as points for the
+// k-d tree.  The gaps are two units and the boxes one, so every
+// distance below is a whole number and no assertion needs a tolerance.
+// The k-nearest case is checked against the 3-4-5 right triangle so
+// that the distance is exactly 5.
+
+use std.test
+use spatialquery
+use spatialrtree
+use spatialkdtree
+use spatialbox
+
+fn at(x: Float, y: Float) -> SpatialPoint
+    match spatialbox.point([x, y])
+        Ok(p)  => p
+        Err(_) => SpatialPoint { coords: [0.0, 0.0] }
+
+fn area_of(lx: Float, ly: Float, ux: Float, uy: Float) -> SpatialBox
+    match spatialbox.box_of([lx, ly], [ux, uy])
+        Ok(b)  => b
+        Err(_) => SpatialBox { lower: [0.0, 0.0], upper: [0.0, 0.0] }
+
+fn row_box(i: Int) -> SpatialBox
+    let x = (i * 2) as Float
+    area_of(x, 0.0, x + 1.0, 1.0)
+
+fn row_index() -> RtreeIndex
+    match spatialrtree.bulk_load([spatialrtree.entry(0, row_box(0)),
+                                  spatialrtree.entry(1, row_box(1)),
+                                  spatialrtree.entry(2, row_box(2)),
+                                  spatialrtree.entry(3, row_box(3)),
+                                  spatialrtree.entry(4, row_box(4))],
+                                  8)
+        Ok(ix) => ix
+        Err(_) => RtreeIndex { root: RtreeNode { bounds: row_box(0), entries: [], children: [] },
+            capacity: 8,
+            dimension: 2,
+            size: 0 }
+
+fn point_index() -> KdTreeIndex
+    match spatialkdtree.build([spatialkdtree.item(0, at(0.0, 0.0)),
+                               spatialkdtree.item(1, at(2.0, 0.0)),
+                               spatialkdtree.item(2, at(4.0, 0.0)),
+                               spatialkdtree.item(3, at(6.0, 0.0)),
+                               spatialkdtree.item(4, at(8.0, 0.0))])
+        Ok(ix) => ix
+        Err(_) => KdTreeIndex { root: None, dimension: 2, size: 0 }
+
+@test
+fn test_a_range_query_answers_the_handles_that_overlap_the_area() [io]
+    // No distance, because "inside this box" has none to report and
+    // inventing one would be a number with no meaning.
+    test.case("an area covering the first two boxes finds exactly those two")
+    match spatialquery.rtree_range(row_index(), area_of(-1.0, -1.0, 3.5, 2.0))
+        Err(e)   => test.fail(e.message())
+        Ok(hits) =>
+            test.assert(list.len(hits) == 2)
+            test.assert(list.contains(hits, 0))
+            test.assert(list.contains(hits, 1))
+
+    test.case("an area in a gap finds nothing, and that is a success")
+    match spatialquery.rtree_range(row_index(), area_of(1.2, 0.0, 1.8, 1.0))
+        Err(e)   => test.fail(e.message())
+        Ok(hits) => test.assert(list.len(hits) == 0)
+
+    test.case("touching counts: an area meeting the second box exactly at its left face hits it")
+    match spatialquery.rtree_range(row_index(), area_of(1.5, 0.0, 2.0, 1.0))
+        Err(e)   => test.fail(e.message())
+        Ok(hits) => test.assert(list.contains(hits, 1))
+
+    test.case("an area covering everything finds all five")
+    match spatialquery.rtree_range(row_index(), area_of(-10.0, -10.0, 10.0, 10.0))
+        Err(e)   => test.fail(e.message())
+        Ok(hits) => test.assert(list.len(hits) == 5)
+
+    test.case("and an area of a different dimension is refused")
+    match spatialbox.box_of([0.0, 0.0, 0.0], [1.0, 1.0, 1.0])
+        Err(e)   => test.fail(e.message())
+        Ok(cube) =>
+            match spatialquery.rtree_range(row_index(), cube)
+                Ok(_)  => test.fail("a cube is not a query on a plane's index")
+                Err(_) => test.assert(true)
+
+@test
+fn test_containing_is_the_hit_test_a_cursor_asks() [io]
+    test.case("a point inside the third box finds it and nothing else")
+    match spatialquery.rtree_containing(row_index(), at(4.5, 0.5))
+        Err(e)   => test.fail(e.message())
+        Ok(hits) =>
+            test.assert(list.len(hits) == 1)
+            test.assert(hits[0] == 2)
+
+    test.case("a point in a gap finds nothing")
+    match spatialquery.rtree_containing(row_index(), at(1.5, 0.5))
+        Err(e)   => test.fail(e.message())
+        Ok(hits) => test.assert(list.len(hits) == 0)
+
+@test
+fn test_nearest_answers_one_hit_or_none_and_carries_the_distance() [io]
+    // The search computed the distance in order to rank and to prune,
+    // so throwing it away would make the caller compute it again over
+    // items this package deliberately does not hold.
+    test.case("from a point two units right of the last box, the last box is nearest at distance 1")
+    match spatialquery.rtree_nearest(row_index(), at(10.0, 0.5))
+        Err(e)      => test.fail(e.message())
+        Ok(None)    => test.fail("five boxes are indexed")
+        Ok(Some(h)) =>
+            test.assert(h.handle == 4)
+            test.assert(h.distance == 1.0)
+
+    test.case("a point inside a box is at distance zero from it")
+    match spatialquery.rtree_nearest(row_index(), at(0.5, 0.5))
+        Err(e)      => test.fail(e.message())
+        Ok(None)    => test.fail("five boxes are indexed")
+        Ok(Some(h)) =>
+            test.assert(h.handle == 0)
+            test.assert(h.distance == 0.0)
+
+    test.case("and an empty index answers None rather than failing")
+    match spatialrtree.empty(2, 8)
+        Err(e) => test.fail(e.message())
+        Ok(ix) =>
+            match spatialquery.rtree_nearest(ix, at(0.0, 0.0))
+                Err(e)      => test.fail(e.message())
+                Ok(Some(_)) => test.fail("nothing is indexed")
+                Ok(None)    => test.assert(true)
+
+@test
+fn test_k_nearest_answers_at_most_k_in_increasing_distance() [io]
+    test.case("the three nearest to a point left of the row are the first three boxes, in order")
+    match spatialquery.rtree_k_nearest(row_index(), at(-1.0, 0.5), 3)
+        Err(e)   => test.fail(e.message())
+        Ok(hits) =>
+            test.assert(list.len(hits) == 3)
+            test.assert(hits[0].handle == 0)
+            test.assert(hits[1].handle == 1)
+            test.assert(hits[2].handle == 2)
+            test.assert(hits[0].distance == 1.0)
+            test.assert(hits[1].distance == 3.0)
+            test.assert(hits[2].distance == 5.0)
+
+    test.case("the distance is planar: from (0.5, 5) to the box at x = 4 is the 3-4-5 triangle")
+    match spatialquery.rtree_k_nearest(row_index(), at(0.5, 5.0), 5)
+        Err(e)   => test.fail(e.message())
+        Ok(hits) =>
+            test.assert(list.len(hits) == 5)
+            test.assert(hits[0].distance == 4.0)
+
+    test.case("asking for more than the index holds answers everything it holds")
+    match spatialquery.rtree_k_nearest(row_index(), at(0.0, 0.0), 10)
+        Err(e)   => test.fail(e.message())
+        Ok(hits) => test.assert(list.len(hits) == 5)
+
+    test.case("k of zero answers nothing, and is a query rather than a mistake")
+    match spatialquery.rtree_k_nearest(row_index(), at(0.0, 0.0), 0)
+        Err(e)   => test.fail(e.message())
+        Ok(hits) => test.assert(list.len(hits) == 0)
+
+    test.case("a negative k names no query")
+    match spatialquery.rtree_k_nearest(row_index(), at(0.0, 0.0), -1)
+        Ok(_)  => test.fail("there is no query for minus one nearest")
+        Err(_) => test.assert(true)
+
+    test.case("and an empty index answers an empty list")
+    match spatialrtree.empty(2, 8)
+        Err(e) => test.fail(e.message())
+        Ok(ix) =>
+            match spatialquery.rtree_k_nearest(ix, at(0.0, 0.0), 3)
+                Err(e)   => test.fail(e.message())
+                Ok(hits) => test.assert(list.len(hits) == 0)
+
+@test
+fn test_a_radius_query_is_a_circle_and_a_range_query_is_a_box() [io]
+    // Different shapes, so different answers, which is why they are
+    // two functions.
+    test.case("a radius of 3 from the left of the row reaches the first two boxes")
+    match spatialquery.rtree_radius(row_index(), at(-1.0, 0.5), 3.0)
+        Err(e)   => test.fail(e.message())
+        Ok(hits) =>
+            test.assert(list.len(hits) == 2)
+            test.assert(hits[0].handle == 0)
+            test.assert(hits[1].handle == 1)
+
+    test.case("a radius of exactly the distance to an item includes it")
+    match spatialquery.rtree_radius(row_index(), at(-1.0, 0.5), 1.0)
+        Err(e)   => test.fail(e.message())
+        Ok(hits) => test.assert(list.len(hits) == 1)
+
+    test.case("a radius of zero answers whatever is exactly at the point")
+    match spatialquery.rtree_radius(row_index(), at(0.5, 0.5), 0.0)
+        Err(e)   => test.fail(e.message())
+        Ok(hits) => test.assert(list.len(hits) == 1)
+
+    test.case("and a negative radius is refused")
+    match spatialquery.rtree_radius(row_index(), at(0.0, 0.0), -1.0)
+        Ok(_)  => test.fail("a negative radius is usually a subtraction the wrong way round")
+        Err(_) => test.assert(true)
+
+@test
+fn test_the_kd_tree_answers_the_same_questions_about_points() [io]
+    test.case("a range query over the first two positions")
+    match spatialquery.kdtree_range(point_index(), area_of(-1.0, -1.0, 3.0, 1.0))
+        Err(e)   => test.fail(e.message())
+        Ok(hits) =>
+            test.assert(list.len(hits) == 2)
+            test.assert(list.contains(hits, 0))
+            test.assert(list.contains(hits, 1))
+
+    test.case("nearest: an exact match is at distance zero and nothing else is")
+    match spatialquery.kdtree_nearest(point_index(), at(4.0, 0.0))
+        Err(e)      => test.fail(e.message())
+        Ok(None)    => test.fail("five points are indexed")
+        Ok(Some(h)) =>
+            test.assert(h.handle == 2)
+            test.assert(h.distance == 0.0)
+
+    test.case("nearest to a point off the row: the 3-4-5 triangle again")
+    match spatialquery.kdtree_nearest(point_index(), at(3.0, 4.0))
+        Err(e)      => test.fail(e.message())
+        Ok(None)    => test.fail("five points are indexed")
+        Ok(Some(h)) =>
+            test.assert(h.handle == 2)
+            test.assert(h.distance == 5.0)
+
+    test.case("k-nearest, in increasing distance")
+    match spatialquery.kdtree_k_nearest(point_index(), at(-1.0, 0.0), 3)
+        Err(e)   => test.fail(e.message())
+        Ok(hits) =>
+            test.assert(list.len(hits) == 3)
+            test.assert(hits[0].handle == 0)
+            test.assert(hits[0].distance == 1.0)
+            test.assert(hits[1].distance == 3.0)
+            test.assert(hits[2].distance == 5.0)
+
+    test.case("more than the tree holds answers everything it holds")
+    match spatialquery.kdtree_k_nearest(point_index(), at(0.0, 0.0), 99)
+        Err(e)   => test.fail(e.message())
+        Ok(hits) => test.assert(list.len(hits) == 5)
+
+    test.case("a radius query")
+    match spatialquery.kdtree_radius(point_index(), at(0.0, 0.0), 2.0)
+        Err(e)   => test.fail(e.message())
+        Ok(hits) =>
+            test.assert(list.len(hits) == 2)
+            test.assert(hits[0].handle == 0)
+
+    test.case("and an empty tree answers empty rather than failing, on every one of them")
+    match spatialkdtree.build([])
+        Err(e) => test.fail(e.message())
+        Ok(ix) =>
+            match spatialquery.kdtree_range(ix, area_of(-9.0, -9.0, 9.0, 9.0))
+                Err(e)   => test.fail(e.message())
+                Ok(hits) => test.assert(list.len(hits) == 0)
+            match spatialquery.kdtree_radius(ix, at(0.0, 0.0), 5.0)
+                Err(e)   => test.fail(e.message())
+                Ok(hits) => test.assert(list.len(hits) == 0)
+            match spatialquery.kdtree_nearest(ix, at(0.0, 0.0))
+                Err(e)      => test.fail(e.message())
+                Ok(Some(_)) => test.fail("nothing is indexed")
+                Ok(None)    => test.assert(true)
+
+@test
+fn test_hit_handles_drops_the_distances_in_one_call() [io]
+    test.case("the order is kept")
+    let hits = [SpatialHit { handle: 2, distance: 1.0 }, SpatialHit { handle: 7, distance: 3.0 }]
+    test.assert(spatialquery.hit_handles(hits) == [2, 7])
+
+    test.case("and an empty list gives an empty list")
+    test.assert(list.len(spatialquery.hit_handles([])) == 0)

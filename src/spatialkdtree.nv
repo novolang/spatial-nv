@@ -1,0 +1,282 @@
+// spatialkdtree.nv — the k-d tree: points only, and one axis per
+// level.
+//
+// WHAT IT IS.  A binary tree over POINTS.  Each node holds one point
+// and splits the space on one axis: everything with a smaller
+// coordinate on that axis goes left, everything larger goes right.
+// The axis cycles with the depth — first coordinate at the root,
+// second one level down, back to the first after the last — so a
+// k-dimensional space is cut by every axis in turn.
+//
+// WHY BOTH THIS AND THE R-TREE.  They index different things and the
+// difference is not a preference.  An R-tree indexes EXTENTS: a road,
+// a parcel of land, a rectangle on a screen, anything that occupies an
+// area and can overlap another.  A k-d tree indexes POSITIONS: a
+// sensor, a city, a vector in a feature space, anything that is one
+// point.
+//
+// Where both apply — a set of points — the k-d tree is the better
+// index.  Its nodes hold no boxes, so it is smaller; its splits are
+// exact rather than approximate, so its subtrees do not overlap and a
+// search never has to open two branches that cover the same ground.
+// The R-tree's advantage is that it can index things a point cannot
+// stand for, and that it bulk-loads and updates well.
+//
+// THE TREE IS BUILT FROM A MEDIAN, WHICH MAKES IT BALANCED AND MAKES
+// IT DETERMINISTIC.  `build` takes every point at once, finds the
+// median on the splitting axis, puts it at the node and recurses on
+// the two halves.  Two builds of the same points give the same tree —
+// there is no random pivot anywhere, which is what a `core` package
+// requires and what lets the tests below assert a shape rather than a
+// property.
+//
+// `insert` exists for a set that grows and does NOT rebalance: a point
+// inserted into a built tree descends to a leaf and stays there.  A
+// tree that has been inserted into many times is worth rebuilding, and
+// `items` plus `build` is how.
+//
+// WHY THE CHILDREN ARE `?KdTreeNode`.  A recursive optional field was
+// measured against this toolchain before this shape was written —
+// declared, constructed, matched, recursed over and run, across a
+// module boundary — and it works.  So a missing child is `None`, which
+// is what it is, rather than an empty list standing in for one.
+
+// One indexed point: where it is, and which item it is.
+//
+// ```novo
+// use spatialkdtree
+// use spatialbox
+//
+// fn main() [io]
+//     match spatialbox.point([1.0, 2.0])
+//         Ok(p)  => println("${spatialkdtree.item(3, p).handle}")   // 3
+//         Err(e) => println(e.message())
+// ```
+pub struct KdTreeItem
+    // The caller's own index into the caller's own list.  Carried and
+    // handed back, never dereferenced here.
+    handle: Int
+    // Where the item is.
+    position: SpatialPoint
+
+// A node: one point, the axis it splits on, and two subtrees.
+//
+// ```novo
+// use spatialkdtree
+//
+// fn main() [io]
+//     match spatialkdtree.build([])
+//         Ok(ix) => println("${spatialkdtree.size(ix)}")   // 0
+//         Err(e) => println(e.message())
+// ```
+pub struct KdTreeNode
+    // The point at this node.  Unlike a B-tree, a k-d tree stores a
+    // point at every node rather than only at the leaves.
+    item: KdTreeItem
+    // Which coordinate this node splits on: 0 for the first, and
+    // cycling with the depth.
+    axis: Int
+    // Everything whose coordinate on `axis` is below this node's.
+    left: ?KdTreeNode
+    // Everything whose coordinate on `axis` is at or above this
+    // node's.
+    right: ?KdTreeNode
+
+// A k-d tree over points.
+//
+// ```novo
+// use spatialkdtree
+//
+// fn main() [io]
+//     match spatialkdtree.build([])
+//         Ok(ix) => println("${spatialkdtree.is_empty(ix)}")   // true
+//         Err(e) => println(e.message())
+// ```
+pub struct KdTreeIndex
+    // The root, or `None` for an empty index.
+    root: ?KdTreeNode
+    // How many axes every point in this index has.
+    dimension: Int
+    // How many points are in the index.
+    size: Int
+
+// An item from a handle and a position.
+//
+// ```novo
+// use spatialkdtree
+// use spatialbox
+//
+// fn main() [io]
+//     match spatialbox.point([0.0, 0.0])
+//         Ok(p)  => println("${spatialkdtree.item(0, p).handle}")   // 0
+//         Err(e) => println(e.message())
+// ```
+pub fn item(handle: Int, position: SpatialPoint) -> KdTreeItem
+    todo("spatial-nv.spatialkdtree.item")
+
+// A balanced tree over all of these points, built by repeated median
+// split.
+//
+// THE CONSTRUCTOR TO USE WHEN THE SET IS KNOWN.  The result is
+// balanced to within one level, and it is deterministic: the same
+// points in a different order give the same tree, because the split is
+// the median rather than a pivot.
+//
+// An empty list gives an empty index, which is an answer rather than a
+// failure — a query on it answers nothing, and that is correct.
+// `SpatialDimensionMismatch` when the points do not all have the same
+// dimension; `SpatialDuplicateHandle` when two items claim the same
+// handle.
+//
+// ```novo
+// use spatialkdtree
+// use spatialbox
+//
+// fn main() [io]
+//     match spatialbox.point([1.0, 1.0])
+//         Err(e) => println(e.message())
+//         Ok(p)  =>
+//             match spatialkdtree.build([spatialkdtree.item(0, p)])
+//                 Ok(ix) => println("${spatialkdtree.size(ix)}")   // 1
+//                 Err(e) => println(e.message())
+// ```
+pub fn build(items: [KdTreeItem]) -> Result<KdTreeIndex, SpatialFault>
+    todo("spatial-nv.spatialkdtree.build")
+
+// An empty index over points of this dimension.
+//
+// `build` on an empty list cannot tell what dimension the index is
+// over, so this is the call for an index that starts empty and is
+// inserted into.  `SpatialEmptyDimension` when the dimension is below
+// 1.
+//
+// ```novo
+// use spatialkdtree
+//
+// fn main() [io]
+//     match spatialkdtree.empty(3)
+//         Ok(ix) => println("${ix.dimension}")   // 3
+//         Err(e) => println(e.message())
+// ```
+pub fn empty(dimension: Int) -> Result<KdTreeIndex, SpatialFault>
+    todo("spatial-nv.spatialkdtree.empty")
+
+// The index with one more point in it.
+//
+// THE CONSTRUCTOR TO USE WHEN THE SET GROWS, and the one with a cost
+// to know about: it descends to a leaf and stops, so it does NOT
+// rebalance.  Points inserted in sorted order build a tree that is a
+// linked list, and every query on it degrades to a scan.  `depth`
+// against `size` is how a caller notices, and `items` plus `build` is
+// how it rebuilds.
+//
+// `SpatialDimensionMismatch` when the point has a different dimension
+// than the index; `SpatialDuplicateHandle` when the handle is already
+// in it.
+//
+// ```novo
+// use spatialkdtree
+// use spatialbox
+//
+// fn main() [io]
+//     match spatialkdtree.empty(2)
+//         Err(e) => println(e.message())
+//         Ok(ix) =>
+//             match spatialbox.point([1.0, 2.0])
+//                 Err(e) => println(e.message())
+//                 Ok(p)  =>
+//                     match spatialkdtree.insert(ix, spatialkdtree.item(1, p))
+//                         Ok(grown) => println("${spatialkdtree.size(grown)}")   // 1
+//                         Err(e)    => println(e.message())
+// ```
+pub fn insert(index: KdTreeIndex, entry: KdTreeItem) -> Result<KdTreeIndex, SpatialFault>
+    todo("spatial-nv.spatialkdtree.insert")
+
+// How many points the index holds.
+//
+// ```novo
+// use spatialkdtree
+//
+// fn main() [io]
+//     match spatialkdtree.build([])
+//         Ok(ix) => println("${spatialkdtree.size(ix)}")   // 0
+//         Err(e) => println(e.message())
+// ```
+pub fn size(index: KdTreeIndex) -> Int
+    todo("spatial-nv.spatialkdtree.size")
+
+// Whether the index holds nothing.
+//
+// ```novo
+// use spatialkdtree
+//
+// fn main() [io]
+//     match spatialkdtree.build([])
+//         Ok(ix) => println("${spatialkdtree.is_empty(ix)}")   // true
+//         Err(e) => println(e.message())
+// ```
+pub fn is_empty(index: KdTreeIndex) -> Bool
+    todo("spatial-nv.spatialkdtree.is_empty")
+
+// How many levels the tree has: 0 for an empty index, 1 for one point.
+//
+// Read it against `size`.  A balanced tree over `n` points is about
+// `log2(n)` deep; a tree that has been inserted into in sorted order
+// is `n` deep, and that difference is the whole performance of every
+// query.
+//
+// ```novo
+// use spatialkdtree
+//
+// fn main() [io]
+//     match spatialkdtree.build([])
+//         Ok(ix) => println("${spatialkdtree.depth(ix)}")   // 0
+//         Err(e) => println(e.message())
+// ```
+pub fn depth(index: KdTreeIndex) -> Int
+    todo("spatial-nv.spatialkdtree.depth")
+
+// Every item in the index, in no particular order.
+//
+// What `build` wants when a caller rebuilds a tree that insertion has
+// unbalanced.
+//
+// ```novo
+// use spatialkdtree
+//
+// fn main() [io]
+//     match spatialkdtree.build([])
+//         Ok(ix) => println("${list.len(spatialkdtree.items(ix))}")   // 0
+//         Err(e) => println(e.message())
+// ```
+pub fn items(index: KdTreeIndex) -> [KdTreeItem]
+    todo("spatial-nv.spatialkdtree.items")
+
+// Every handle in the index, in no particular order.
+//
+// ```novo
+// use spatialkdtree
+//
+// fn main() [io]
+//     match spatialkdtree.build([])
+//         Ok(ix) => println("${list.len(spatialkdtree.handles(ix))}")   // 0
+//         Err(e) => println(e.message())
+// ```
+pub fn handles(index: KdTreeIndex) -> [Int]
+    todo("spatial-nv.spatialkdtree.handles")
+
+// Which axis a node at this depth splits on: the depth modulo the
+// dimension.
+//
+// The rule the whole structure turns on, written down once so that a
+// caller reading a tree — in a test, in a debugger, in a drawing —
+// can work out what any node means.
+//
+// ```novo
+// use spatialkdtree
+//
+// fn main() [io]
+//     println("${spatialkdtree.axis_at_depth(3, 2)}")   // 1
+// ```
+pub fn axis_at_depth(depth: Int, dimension: Int) -> Int
+    todo("spatial-nv.spatialkdtree.axis_at_depth")

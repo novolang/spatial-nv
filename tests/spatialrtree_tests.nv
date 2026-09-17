@@ -1,0 +1,217 @@
+// spatialrtree_tests.nv — the tree, the handle, and the two
+// constructors.
+//
+// RED ON PURPOSE: every assertion reaches `not implemented:
+// spatial-nv.spatialrtree.<fn>`.
+//
+// THE FIXTURE, used here and in the query suite: five unit boxes in a
+// row on the x axis, at 0, 2, 4, 6 and 8, each one unit wide and one
+// unit tall, with handles 0 to 4.  Every question about it has one
+// right answer that a reader can work out on paper, and the gaps are
+// wide enough that no tolerance is needed anywhere.
+
+use std.test
+use spatialrtree
+use spatialbox
+
+fn row_box(i: Int) -> SpatialBox
+    let x = (i * 2) as Float
+    match spatialbox.box_of([x, 0.0], [x + 1.0, 1.0])
+        Ok(b)  => b
+        Err(_) => SpatialBox { lower: [0.0, 0.0], upper: [0.0, 0.0] }
+
+fn row_entries() -> [RtreeEntry]
+    [spatialrtree.entry(0, row_box(0)),
+     spatialrtree.entry(1, row_box(1)),
+     spatialrtree.entry(2, row_box(2)),
+     spatialrtree.entry(3, row_box(3)),
+     spatialrtree.entry(4, row_box(4))]
+
+@test
+fn test_an_entry_is_a_box_and_a_handle_and_nothing_else() [io]
+    // The index never sees whatever the box stands for.  A handle is
+    // the caller's own position in the caller's own list, carried and
+    // handed back.
+    test.case("the handle goes in and comes out unchanged")
+    let e = spatialrtree.entry(42, row_box(0))
+    test.assert(e.handle == 42)
+    test.assert(spatialbox.dimension(e.bounds) == 2)
+
+@test
+fn test_the_default_capacity_is_a_function_not_a_constant_to_copy() [io]
+    test.case("eight, in the middle of the published optimum")
+    test.assert(spatialrtree.default_capacity() == 8)
+
+@test
+fn test_an_empty_index_is_a_working_index() [io]
+    test.case("no entries, one level, a root that is a leaf")
+    match spatialrtree.empty(2, 8)
+        Err(e) => test.fail(e.message())
+        Ok(ix) =>
+            test.assert(spatialrtree.size(ix) == 0)
+            test.assert(spatialrtree.depth(ix) == 1)
+            test.assert(spatialrtree.is_leaf(ix.root))
+            test.assert(list.len(spatialrtree.handles(ix)) == 0)
+            test.assert(list.len(spatialrtree.entries(ix)) == 0)
+
+    test.case("and it has no extent, so its bounds are None rather than a box at the origin")
+    match spatialrtree.empty(2, 8)
+        Err(e) => test.fail(e.message())
+        Ok(ix) => test.assert_none(spatialrtree.bounds(ix))
+
+@test
+fn test_a_capacity_below_two_makes_a_linked_list_and_is_refused() [io]
+    test.case("one entry per node is a correct index and a useless one")
+    match spatialrtree.empty(2, 1)
+        Ok(_)  => test.fail("a node that holds one entry is not a tree")
+        Err(_) => test.assert(true)
+
+    test.case("and a dimension below one names no space")
+    match spatialrtree.empty(0, 8)
+        Ok(_)  => test.fail("there is no zero-dimensional space to index")
+        Err(_) => test.assert(true)
+
+@test
+fn test_bulk_loading_puts_every_entry_in_and_bounds_them_all() [io]
+    test.case("five entries in, five entries out")
+    match spatialrtree.bulk_load(row_entries(), 8)
+        Err(e) => test.fail(e.message())
+        Ok(ix) =>
+            test.assert(spatialrtree.size(ix) == 5)
+            test.assert(list.len(spatialrtree.handles(ix)) == 5)
+
+    test.case("the index's bounds hold every box: x from 0 to 9, y from 0 to 1")
+    match spatialrtree.bulk_load(row_entries(), 8)
+        Err(e) => test.fail(e.message())
+        Ok(ix) =>
+            match spatialrtree.bounds(ix)
+                None    => test.fail("a non-empty index has an extent")
+                Some(b) =>
+                    test.assert(b.lower == [0.0, 0.0])
+                    test.assert(b.upper == [9.0, 1.0])
+
+    test.case("five entries at capacity eight fit in one leaf, so the tree is one level deep")
+    match spatialrtree.bulk_load(row_entries(), 8)
+        Err(e) => test.fail(e.message())
+        Ok(ix) =>
+            test.assert(spatialrtree.depth(ix) == 1)
+            test.assert(spatialrtree.is_leaf(ix.root))
+
+    test.case("at capacity two the same five entries need a deeper tree")
+    match spatialrtree.bulk_load(row_entries(), 2)
+        Err(e) => test.fail(e.message())
+        Ok(ix) =>
+            test.assert(spatialrtree.size(ix) == 5)
+            test.assert(spatialrtree.depth(ix) > 1)
+            test.assert(not spatialrtree.is_leaf(ix.root))
+
+@test
+fn test_bulk_loading_refuses_the_inputs_that_describe_no_index() [io]
+    test.case("an empty list cannot say what dimension the index is over")
+    match spatialrtree.bulk_load([], 8)
+        Ok(_)  => test.fail("the dimension cannot be inferred from nothing — `empty` is the call for that")
+        Err(_) => test.assert(true)
+
+    test.case("two entries claiming the same handle would make every query ambiguous")
+    match spatialrtree.bulk_load([spatialrtree.entry(1, row_box(0)), spatialrtree.entry(1, row_box(1))], 8)
+        Ok(_)  => test.fail("a handle identifies one item")
+        Err(_) => test.assert(true)
+
+    test.case("and entries of mixed dimension are not one index")
+    match spatialbox.box_of([0.0, 0.0, 0.0], [1.0, 1.0, 1.0])
+        Err(e)   => test.fail(e.message())
+        Ok(cube) =>
+            match spatialrtree.bulk_load([spatialrtree.entry(0, row_box(0)), spatialrtree.entry(1, cube)], 8)
+                Ok(_)  => test.fail("a square and a cube do not belong to one index")
+                Err(_) => test.assert(true)
+
+@test
+fn test_insertion_grows_the_index_and_answers_a_new_one() [io]
+    // Nothing is written in place, which is what keeps the package
+    // `[]` and what makes the old index still usable afterwards.
+    test.case("one insert into an empty index")
+    match spatialrtree.empty(2, 8)
+        Err(e) => test.fail(e.message())
+        Ok(ix) =>
+            match spatialrtree.insert(ix, spatialrtree.entry(0, row_box(0)))
+                Err(e)    => test.fail(e.message())
+                Ok(grown) =>
+                    test.assert(spatialrtree.size(grown) == 1)
+                    test.assert(spatialrtree.size(ix) == 0)
+
+    test.case("insert_all is the same as inserting each in turn")
+    match spatialrtree.empty(2, 8)
+        Err(e) => test.fail(e.message())
+        Ok(ix) =>
+            match spatialrtree.insert_all(ix, row_entries())
+                Err(e)   => test.fail(e.message())
+                Ok(full) => test.assert(spatialrtree.size(full) == 5)
+
+    test.case("inserting nothing changes nothing")
+    match spatialrtree.empty(2, 8)
+        Err(e) => test.fail(e.message())
+        Ok(ix) =>
+            match spatialrtree.insert_all(ix, [])
+                Err(e)   => test.fail(e.message())
+                Ok(same) => test.assert(spatialrtree.size(same) == 0)
+
+    test.case("a handle already in the index is refused")
+    match spatialrtree.bulk_load(row_entries(), 8)
+        Err(e) => test.fail(e.message())
+        Ok(ix) =>
+            match spatialrtree.insert(ix, spatialrtree.entry(2, row_box(0)))
+                Ok(_)  => test.fail("handle 2 is already indexed")
+                Err(_) => test.assert(true)
+
+    test.case("and a box of the wrong dimension is refused")
+    match spatialrtree.empty(2, 8)
+        Err(e) => test.fail(e.message())
+        Ok(ix) =>
+            match spatialbox.box_of([0.0, 0.0, 0.0], [1.0, 1.0, 1.0])
+                Err(e)   => test.fail(e.message())
+                Ok(cube) =>
+                    match spatialrtree.insert(ix, spatialrtree.entry(0, cube))
+                        Ok(_)  => test.fail("a cube does not go into a two-dimensional index")
+                        Err(_) => test.assert(true)
+
+@test
+fn test_removal_takes_the_handle_out_and_says_so_when_it_is_not_there() [io]
+    test.case("four left of five, and the removed handle is gone")
+    match spatialrtree.bulk_load(row_entries(), 8)
+        Err(e) => test.fail(e.message())
+        Ok(ix) =>
+            match spatialrtree.remove(ix, 2)
+                Err(e)      => test.fail(e.message())
+                Ok(smaller) =>
+                    test.assert(spatialrtree.size(smaller) == 4)
+                    test.assert(not list.contains(spatialrtree.handles(smaller), 2))
+
+    test.case("a handle that is not there is named rather than ignored")
+    match spatialrtree.bulk_load(row_entries(), 8)
+        Err(e) => test.fail(e.message())
+        Ok(ix) =>
+            match spatialrtree.remove(ix, 99)
+                Ok(_)  => test.fail("a silent no-op hides a bug in the caller's bookkeeping")
+                Err(_) => test.assert(true)
+
+    test.case("removing everything leaves an index with no extent")
+    match spatialrtree.bulk_load([spatialrtree.entry(0, row_box(0))], 8)
+        Err(e) => test.fail(e.message())
+        Ok(ix) =>
+            match spatialrtree.remove(ix, 0)
+                Err(e)        => test.fail(e.message())
+                Ok(none_left) =>
+                    test.assert(spatialrtree.size(none_left) == 0)
+                    test.assert_none(spatialrtree.bounds(none_left))
+
+@test
+fn test_entries_round_trips_through_bulk_load_which_is_how_a_tree_is_rebuilt() [io]
+    // The repair for a tree that insertion and removal have left
+    // badly packed.
+    test.case("the entries out of one index build an index of the same size")
+    match spatialrtree.bulk_load(row_entries(), 8)
+        Err(e) => test.fail(e.message())
+        Ok(ix) =>
+            match spatialrtree.bulk_load(spatialrtree.entries(ix), 8)
+                Err(e)      => test.fail(e.message())
+                Ok(rebuilt) => test.assert(spatialrtree.size(rebuilt) == 5)

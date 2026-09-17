@@ -1,0 +1,50 @@
+[package]
+name        = "spatial-nv"
+version     = "0.0.1"
+description = "R-trees and k-d trees over items the caller keeps: an index holds a bounding box or a point and an integer handle into the caller's own list, answers nearest, k-nearest, range and radius queries, and is built either by Sort-Tile-Recursive bulk loading in one pass or by insertion as the set grows."
+license     = "Apache-2.0"
+
+# An INTERFACE release: every `pub fn` body is a `todo()`, so the
+# signatures and the effect rows are published and nothing is
+# implemented.  `novo pkg publish` recognises the shape and requires
+# both the draft stability and the 0.0.x version; the first
+# implementation is the 0.1.0 published over it.
+stability   = "draft"
+
+# `core`.  An index is a tree of boxes and integers, and every
+# operation is arithmetic and comparison over what the caller already
+# holds.  Nothing is read, nothing is written, no clock and no entropy
+# is consulted — the k-d tree splits at the MEDIAN rather than at a
+# random pivot, which is the one place a spatial index usually reaches
+# for a generator, and which is why two builds of the same points give
+# the same tree.  Every index is a value and every mutation answers a
+# new one, so `[mutate]` never arises either.  The whole surface is `[]`.
+layer       = "core"
+
+category    = "science"
+
+tags        = ["rtree", "kdtree", "spatial-index", "nearest-neighbour", "range-query", "geospatial", "science"]
+repository  = "https://github.com/novolang/spatial-nv"
+maintainers = ["novo-lang"]
+novo        = ">= 0.9.0"
+
+# A library: no `main`, so `novo pkg build` type-checks and
+# effect-checks every module under `src/` and writes no binary.
+
+[docs.pages]
+"README.md" = "R-trees and k-d trees over items the caller keeps, keyed by a box or a point"
+
+[dependencies]
+# None, and geo-nv in particular is NOT one.  This package is the
+# index geo-nv's geometries will be looked up through, and it takes
+# their bounding boxes as plain numbers rather than taking their types:
+# an index over longitudes and an index over pixel coordinates are the
+# same data structure, and a dependency here would put a geometry
+# model in the closure of every consumer indexing a screen, a feature
+# vector or a set of sensor positions.  The arrow runs the other way —
+# a caller that has both hands geo-nv's box to this package — and that
+# keeps either one publishable without the other.
+#
+# `ndarray-nv` is not one either: the coordinates here are a handful
+# of numbers per item, not a matrix, and every operation on them is a
+# comparison rather than a linear-algebra step.
